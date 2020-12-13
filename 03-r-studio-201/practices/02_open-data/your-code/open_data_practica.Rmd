@@ -11,6 +11,7 @@ output:
 
 ## 1. Contexto. 
 A partir de los datos abiertos de contaminación de las estaciones meteorológicas de Gijón la práctica consistirá en:
+
 - Hacer un estudio sobre los datos con el fin de conocer si existen diferencias significativas entre estaciones.
 - Hacer un forecast de evolución de un par de indicadores en una de las estaciones.
 
@@ -57,9 +58,10 @@ library(leaflet)
 library(ggplot2)
 library(corrplot)
 library(PerformanceAnalytics)
-library(forecast)
 library(rapportools)
 library(PMCMR)
+library(forecast)
+library(tseries)
 ```
 
 
@@ -628,3 +630,123 @@ Podemos extraer de la tabla anterior varias conclusiones, relativas a las estaci
 
 Las demás estaciones presentan diferencias estadísticamente significativas entre sí, destacando la Estación de Montevil por tener la media de concentración de SO2 más baja de todas las estaciones. Las que presentan una mayor concentración de SO2 son la Estación de Avenida Castilla y de Avenida Argentina.
 Al igual que ocurría con las concentraciones de NO2, estas dos estaciones no presentan diferencias significativas entre sí, por lo que parecen ser las estaciones más parecidas (al menos a priori sin examinar otras medidas que pudieran dar diferencias adicionales).
+
+
+## 6. Realizar un forecast para dos métricas significativas - ARIMA / FORECAST.
+El forecast es un modelo de predicción basado en series temporales, ya que nosotros tenemos fechas de distintos años (2015 y 2020), filtraremos el dataframe por fecha para que solo aparezcan los datos del 2020 que al ser más recientes nos parecen más interesantes. Comprobamos una vez filtrado el dataframe qué estaciones reportan datos en 2020.
+```{r}
+# Creamos un dataframe filtrando por fecha.
+data_gijon_2020 <- data_gijon %>% filter(Fecha_UTC > "2020-01-01")
+
+# Comprobamos qué estaciones aportan datos en 2020.
+unique(data_gijon_2020$EstacionName)
+```
+
+Creamos distintos dataframes filtrados por estaciones para poder seleccionar alguna estación en concreto que resulte interesante en relación a alguna medida que queramos predecir. Tras esto procedemos a crear el modelo forecast para la primera métrica elegida (SO2).
+```{r}
+# Creamos distintos dataframes filtrando por estaciones.
+data_gijon_Argentina <- data_gijon_2020 %>% filter(EstacionName == "Estación Avenida Argentina")
+data_gijon_Constitucion <- data_gijon_2020 %>% filter(EstacionName == "Estación Avenida Constitución")
+data_gijon_Castilla <- data_gijon_2020 %>% filter(EstacionName == "Estación Avenida Castilla")
+data_gijon_Montevil <- data_gijon_2020 %>% filter(EstacionName == "Estación de Montevil")
+data_gijon_Felgueroso <- data_gijon_2020 %>% filter(EstacionName == "Estación Avenida Hermanos Felgueroso")
+```
+
+### 6.1. Forecast con SO2.
+Realizamos un gráfico en el que poder comparar las líneas temporales según las distintas estaciones que aportan información sobre esta métrica. De esta forma, podemos visualmente ver una estimación de las tendencias de cada estación y elegir la estación que ofrezca unos datos aparentemente más interesantes. En este caso, elegimos la Estación Avenida Castilla.
+```{r}
+# Realizamos el gráfico con ggplot.
+  ggplot() + 
+    geom_line(data = data_gijon_Constitucion, aes(x = Fecha_UTC, y = SO2), color = "blue") +
+    geom_line(data = data_gijon_Argentina, aes(x = Fecha_UTC, y = SO2), color = "green") +
+    geom_line(data = data_gijon_Castilla, aes(x = Fecha_UTC, y = SO2), color = "orange") +
+    geom_line(data = data_gijon_Felgueroso, aes(x = Fecha_UTC, y = SO2), color = "red") +
+    scale_x_datetime('month')
+```
+
+Comenzamos creando la serie temporal y calculamos sus componentes con la función `stl`. 
+```{r}
+# Creamos la serie temporal.
+SO2_ts = ts(na.omit(data_gijon_Castilla$SO2), frequency=24)
+
+# Sacamos los componentes de la serie temporal.
+SO2_components = stl(SO2_ts, s.window="periodic")
+
+# Mostramos el gráfico.
+plot(SO2_components)
+```
+
+Ya que un modelo ARIMA requiere de estacionalidad. Para que una serie se considere estacionaria su media y su varianza deben ser invariantes en el tiempo. Comprobamos si nuestra serie es estacionaria con el `test de Dickey-Fuller (ADF)`, cuyas hipótesis son:
+
+$H_0$: La serie no es estacionaria.
+
+$H_1$: La serie es estacionaria.
+
+En este caso, vemos que el p-value es > 0.05, con lo que aceptamos hipótesis nula y concluimos que la serie no es estacionaria. Siendo así, realizaremos algunas autocorrecciones para poder realizar el forecast.
+```{r}
+adf.test(SO2_ts, alternative = "stationary")
+```
+
+Posteriormente, realizamos el ajuste del modelo ARIMA indicándole que la serie no es estacionaria para que busque el modelo correcto:
+```{r}
+# Ajustamos el modelo y lo guardamos.
+arima_model <- auto.arima(SO2_ts,  stationary = FALSE)
+
+# Mostramos el modelo ajustado.
+arima_model
+```
+
+Generamos la predicción con el modelo ajustado con la función `forecast`. Por último, mostramos el gráfico del forecast y podemos ver cómo se ha realizado la predicción de los valores futuros de SO2, mostrándose una tendencia sutilmente ascendente.
+```{r}
+# Creamos la predicción.
+prediction_SO2 <- forecast(arima_model, h=30)
+
+# Mostramos la gráfica de la predicción.
+plot(prediction_SO2)
+```
+
+
+### 6.2. Forecast con PM2,5.
+Pasamos a crear el modelo de predicción con otra métrica, en este caso, el PM25. Procedemos siguiendo los mismos pasos que hicimos anteriormente para crear el modelo de SO2, empezando por dibujar un gráfico que ilustre las líneas temporales de las estaciones que reportan esta sustancia.
+```{r}
+# Realizamos el gráfico con ggplot.
+  ggplot() + 
+    geom_line(data = data_gijon_Montevil, aes(x = Fecha_UTC, y = PM25), color = "blue") +
+    geom_line(data = data_gijon_Constitucion, aes(x = Fecha_UTC, y = PM25), color = "red") +
+    scale_x_datetime('month')
+```
+
+Nos quedamos con la estación Avenida Constitución, creaamos la serie temporal y calculamos sus componentes con la función `stl`. 
+```{r}
+# Creamos la serie temporal.
+PM25_ts = ts(na.omit(data_gijon_Constitucion$PM25), frequency=24)
+
+# Sacamos los componentes de la serie temporal.
+PM25_components = stl(PM25_ts, s.window="periodic")
+
+# Mostramos el gráfico.
+plot(PM25_components)
+```
+
+Comprobamos si nuestra serie es estacionaria con el `test de Dickey-Fuller (ADF)`. En este caso, vemos que el p-value es < 0.05, con lo que rechazamos la hipótesis nula y concluimos que la serie es estacionaria. Siendo así, no es necesario realizar autocorrecciones para poder hacer el forecast.
+```{r}
+adf.test(PM25_ts, alternative = "stationary")
+```
+
+Generamos el modelo ARIMA para PM2.5 y lo mostramos.
+```{r}
+# Ajustamos el modelo y lo guardamos.
+PM25_arima_model <- auto.arima(PM25_ts)
+
+# Mostramos el modelo ajustado.
+PM25_arima_model
+```
+
+Generamos la predicción con nuestra serie temporal a través de la función `forecast`. Por último, mostramos el gráfico del forecast y podemos ver cómo se ha realizado la predicción de los valores futuros de PM25, mostrándose una tendencia a la estabilización ligeramente por encima de 5.
+```{r}
+# Creamos la predicción.
+prediction_PM25 <- forecast(PM25_arima_model, h=30)
+
+# Mostramos la gráfica de la predicción.
+plot(prediction_PM25)
+```
